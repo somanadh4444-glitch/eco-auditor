@@ -98,7 +98,3 @@ src/
 ├── App.jsx
 └── main.jsx
 
----
-
-## 📄 License
-MIT
