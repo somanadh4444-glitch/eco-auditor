@@ -4,7 +4,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { collection, query, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, query, onSnapshot, where } from 'firebase/firestore';
+import { User as FirebaseUser } from 'firebase/auth';
 import { db } from '../firebase';
 import { WasteLog, WasteCategory } from '../types';
 import DashboardMap from './DashboardMap';
@@ -25,6 +26,7 @@ import { motion } from 'motion/react';
 
 interface DashboardPageProps {
   updateTrigger: number; // to handle manual re-fetches if any
+  user: FirebaseUser | null;
 }
 
 const CATEGORY_META: Record<WasteCategory, { label: string; icon: React.ReactNode; color: string; border: string; bg: string; text: string }> = {
@@ -70,20 +72,23 @@ const CATEGORY_META: Record<WasteCategory, { label: string; icon: React.ReactNod
   }
 };
 
-export default function DashboardPage({ updateTrigger }: DashboardPageProps) {
+export default function DashboardPage({ updateTrigger, user }: DashboardPageProps) {
   const [logs, setLogs] = useState<WasteLog[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [displayUnit, setDisplayUnit] = useState<'kg' | 'lbs'>('kg');
 
   useEffect(() => {
+    setLogs([]); // Immediately clear logs to prevent any cross-user data leakage or flicker
     setLoading(true);
     setError(null);
 
-    // Live query listening to firestore
+    const currentUserUid = user?.uid || 'anonymous';
+
+    // Query waste logs that match the current logged-in user's userId
     const logsQuery = query(
       collection(db, 'waste_logs'), 
-      orderBy('timestamp', 'desc')
+      where('userId', '==', currentUserUid)
     );
 
     const unsubscribe = onSnapshot(
@@ -122,6 +127,19 @@ export default function DashboardPage({ updateTrigger }: DashboardPageProps) {
             isPending: isPending
           } as WasteLog);
         });
+
+        // Client-side sort by timestamp descending to avoid needing complex composite Firestore index
+        tempLogs.sort((a, b) => {
+          const getMs = (ts: any) => {
+            if (!ts) return Date.now(); // Put pending syncs/just now at the top
+            if (ts.toDate) return ts.toDate().getTime();
+            if (ts instanceof Date) return ts.getTime();
+            if (typeof ts.seconds === 'number') return ts.seconds * 1000;
+            return 0;
+          };
+          return getMs(b.timestamp) - getMs(a.timestamp);
+        });
+
         setLogs(tempLogs);
         setLoading(false);
       },
@@ -133,7 +151,7 @@ export default function DashboardPage({ updateTrigger }: DashboardPageProps) {
     );
 
     return () => unsubscribe();
-  }, [updateTrigger]);
+  }, [updateTrigger, user]);
 
   // Calculate live totals per category in kilograms (base representation)
   const totals: Record<WasteCategory, number> = {
@@ -188,8 +206,8 @@ export default function DashboardPage({ updateTrigger }: DashboardPageProps) {
       {/* Dashboard Unit Control & Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-stone-200/80 shadow-xs" id="dashboard-unit-header">
         <div>
-          <h2 className="text-xs font-bold text-slate-800 uppercase tracking-widest">Community Environmental Ledger</h2>
-          <p className="text-[11px] text-slate-400 mt-0.5">Aggregates and live analytics from localized environmental compliance audits.</p>
+          <h2 className="text-xs font-bold text-slate-800 uppercase tracking-widest">My Personal Environmental Ledger</h2>
+          <p className="text-[11px] text-slate-400 mt-0.5">Aggregates and live analytics from your localized environmental compliance audits.</p>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Display Unit:</span>
@@ -264,8 +282,8 @@ export default function DashboardPage({ updateTrigger }: DashboardPageProps) {
             <Scale className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="font-display text-lg font-bold">Total Community Footprint</h3>
-            <p className="text-slate-400 text-xs">Accumulated weight across all localized ecological audits</p>
+            <h3 className="font-display text-lg font-bold">My Personal Footprint</h3>
+            <p className="text-slate-400 text-xs">Accumulated weight of your logged ecological audits</p>
           </div>
         </div>
         <div className="relative z-10 text-center sm:text-right">
@@ -282,7 +300,7 @@ export default function DashboardPage({ updateTrigger }: DashboardPageProps) {
       <div className="bg-white border border-stone-200 rounded-2xl shadow-xs overflow-hidden" id="logs-table-card">
         <div className="p-6 border-b border-stone-100 flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h3 className="font-display font-bold text-slate-900">Community Waste Ledger</h3>
+            <h3 className="font-display font-bold text-slate-900">My Logged Waste Entries</h3>
             <p className="text-slate-400 text-xs mt-0.5">Real-time synchronized data logs</p>
           </div>
           {loading && (
@@ -335,7 +353,7 @@ export default function DashboardPage({ updateTrigger }: DashboardPageProps) {
                       </div>
                       <span className="text-slate-800 font-bold block text-sm mb-1">No Entries Logged Yet</span>
                       <p className="text-xs text-slate-400 leading-relaxed">
-                        Go to the Form View tab to log your very first eco audit entry for this community.
+                        Go to the Form View tab to log your very first eco audit entry.
                       </p>
                     </div>
                   </td>

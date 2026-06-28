@@ -259,7 +259,7 @@ export default function App() {
               exit={{ opacity: 0, y: -15 }}
               transition={{ duration: 0.2 }}
             >
-              <DashboardPage updateTrigger={dashboardTrigger} />
+              <DashboardPage updateTrigger={dashboardTrigger} user={user} />
             </motion.div>
           )}
         </AnimatePresence>
