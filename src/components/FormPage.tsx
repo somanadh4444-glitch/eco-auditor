@@ -37,11 +37,16 @@ interface FormPageProps {
 }
 
 // Client-side image compression helper to keep base64 payloads light and highly compatible with Firestore limits
-const compressImage = (base64Str: string, maxWidth = 600, maxHeight = 600, quality = 0.75): Promise<string> => {
+// Uses URL.createObjectURL to avoid allocating massive base64 strings in memory on mobile devices
+const compressImageFile = (file: File, maxWidth = 800, maxHeight = 800, quality = 0.75): Promise<string> => {
   return new Promise((resolve) => {
+    const objectUrl = URL.createObjectURL(file);
     const img = new Image();
-    img.src = base64Str;
+    
     img.onload = () => {
+      // Clean up object URL immediately to release memory
+      URL.revokeObjectURL(objectUrl);
+
       let width = img.width;
       let height = img.height;
 
@@ -63,18 +68,38 @@ const compressImage = (base64Str: string, maxWidth = 600, maxHeight = 600, quali
 
       const ctx = canvas.getContext('2d');
       if (!ctx) {
-        resolve(base64Str);
+        // Fallback to FileReader if canvas is not available
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
         return;
       }
 
       // Draw and export compressed JPEG
       ctx.drawImage(img, 0, 0, width, height);
-      const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve(compressedDataUrl);
+      try {
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(compressedDataUrl);
+      } catch (err) {
+        console.error("Canvas export failed, falling back:", err);
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
+      }
     };
+
     img.onerror = () => {
-      resolve(base64Str);
+      URL.revokeObjectURL(objectUrl);
+      // Fallback to FileReader if image element fails to load object URL
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
     };
+
+    img.src = objectUrl;
   });
 };
 
@@ -163,39 +188,37 @@ export default function FormPage({ onSuccess, onSubmittingStateChange, onViewDas
     setSubmittedLog(null);
   };
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check pre-compression size limit (allow slightly larger since we compress it anyway)
-    if (file.size > 8 * 1024 * 1024) {
-      setError('Image is too large. Please select an image smaller than 8MB.');
+    // Check pre-compression size limit (allow much larger since we compress it to < 100KB anyway)
+    if (file.size > 30 * 1024 * 1024) {
+      setError('Image is too large. Please select an image smaller than 30MB.');
       return;
     }
 
     setIsCompressingImage(true);
     setError(null);
 
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      try {
-        const rawBase64 = reader.result as string;
-        // Perform beautiful client-side canvas-based downscaling and compression
-        const compressedBase64 = await compressImage(rawBase64);
+    try {
+      // Perform highly memory-efficient client-side canvas-based downscaling and compression
+      const compressedBase64 = await compressImageFile(file);
+      if (compressedBase64) {
         setImageUrl(compressedBase64);
-      } catch (err) {
-        console.error("Compression error:", err);
-        setError('Failed to compress selected image. Retrying with original...');
-        setImageUrl(reader.result as string);
-      } finally {
-        setIsCompressingImage(false);
+      } else {
+        throw new Error('Could not process image data');
       }
-    };
-    reader.onerror = () => {
-      setError('Failed to read image file.');
+    } catch (err) {
+      console.error("Compression error:", err);
+      setError('Failed to process and compress selected image. Please try another photo.');
+    } finally {
       setIsCompressingImage(false);
-    };
-    reader.readAsDataURL(file);
+      // Reset file input value to allow selecting the same image again if needed
+      if (e.target) {
+        e.target.value = '';
+      }
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -211,11 +234,6 @@ export default function FormPage({ onSuccess, onSubmittingStateChange, onViewDas
     const parsedWeight = parseFloat(weight);
     if (isNaN(parsedWeight) || parsedWeight <= 0) {
       setError(`Please enter a valid weight greater than 0 ${unit}.`);
-      return;
-    }
-
-    if (!imageUrl) {
-      setError('Proof of disposal image is required. Please take a photo or upload an image of the waste.');
       return;
     }
 
@@ -564,7 +582,7 @@ export default function FormPage({ onSuccess, onSubmittingStateChange, onViewDas
                   {/* Proof of Disposal Upload */}
                   <div className="space-y-3" id="proof-of-disposal-container">
                     <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      3. Verified Proof of Disposal <span className="text-rose-500 font-bold">*</span>
+                      3. Verified Proof of Disposal <span className="text-slate-400 font-normal lowercase">(Optional)</span>
                     </label>
                     
                     {isCompressingImage ? (
@@ -577,8 +595,7 @@ export default function FormPage({ onSuccess, onSubmittingStateChange, onViewDas
                       </div>
                     ) : !imageUrl ? (
                       <div 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="border-2 border-dashed border-stone-200 hover:border-emerald-500/50 hover:bg-stone-50/10 bg-stone-50/30 rounded-2xl p-6 transition-all text-center group relative cursor-pointer"
+                        className="border-2 border-dashed border-stone-200 hover:border-emerald-500/50 hover:bg-stone-50/10 bg-stone-50/30 rounded-2xl p-6 transition-all text-center group relative min-h-[140px] flex items-center justify-center cursor-pointer"
                         title="Click to select file or take photo"
                       >
                         <input
@@ -586,16 +603,16 @@ export default function FormPage({ onSuccess, onSubmittingStateChange, onViewDas
                           ref={fileInputRef}
                           accept="image/*"
                           onChange={handleImageChange}
-                          className="hidden"
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                           id="proof-image-file-input"
                         />
-                        <div className="flex flex-col items-center justify-center space-y-2 pointer-events-none">
+                        <div className="flex flex-col items-center justify-center space-y-2 pointer-events-none relative z-0">
                           <div className="p-3 bg-white border border-stone-100 rounded-xl text-stone-400 group-hover:text-emerald-600 group-hover:scale-105 transition-all shadow-xs">
                             <Camera className="w-5 h-5" />
                           </div>
                           <div>
                             <span className="text-xs font-bold text-slate-700 block">Take photo or upload image</span>
-                            <span className="text-[10px] text-slate-400 block mt-0.5">Supports JPG, PNG up to 8MB</span>
+                            <span className="text-[10px] text-slate-400 block mt-0.5">Supports high-res camera photos up to 30MB</span>
                           </div>
                         </div>
                       </div>
