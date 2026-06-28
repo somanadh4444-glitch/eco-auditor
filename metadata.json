@@ -1,0 +1,8 @@
+{
+  "name": "EcoAudit - Community Waste Logger",
+  "description": "A community waste logging application to track and visualize localized waste types, weights, and categories with real-time statistics.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
